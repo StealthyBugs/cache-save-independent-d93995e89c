@@ -1,0 +1,94 @@
+name: protected cache save independent producer
+on:
+  workflow_dispatch:
+    inputs:
+      case:
+        required: true
+        type: string
+      head_sha:
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  save:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Owner-authored runtime-only fixtures
+        shell: bash
+        env:
+          SYNTHETIC_CANARY: ${{ secrets.CACHE_SAVE_INDEPENDENT_CANARY }}
+          SAFE_VALUE: CACHE_SAFE_INDEPENDENT_b514022d3919d5902c7b3812e5c43dd49d92547bb11818a3311a55be
+        run: |
+          python3 - <<'PYFIX'
+          import os,pathlib
+          secret=os.environ['SYNTHETIC_CANARY']
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])
+          parent=root/'cache-parent';parent.mkdir(parents=True,exist_ok=True);(parent/'canary.txt').write_text(secret)
+          (root/'cache-leaf.txt').write_text(secret)
+          regular=pathlib.Path('control/regular/safe.txt');regular.parent.mkdir(parents=True,exist_ok=True);regular.write_text(os.environ['SAFE_VALUE'])
+          PYFIX
+      - name: Checkout exact lower data commit only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: test8177/cache-save-independent-d93995e89c
+          ref: ${{ inputs.head_sha }}
+          path: lower-data
+          persist-credentials: false
+      - name: Save regular control
+        if: inputs.case == 'regular'
+        id: regular
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: control/regular/safe.txt
+          key: cache-independent-regular-cbfb444675986d13603c519c
+      - name: Save safe lower member
+        if: inputs.case == 'safe-member'
+        id: safe_member
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: lower-data/data/safe.txt
+          key: cache-independent-safe-member-cbfb444675986d13603c519c
+      - name: Save exact leaf link
+        if: inputs.case == 'leaf'
+        id: leaf
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: lower-data/cache-leaf.txt
+          key: cache-independent-leaf-cbfb444675986d13603c519c
+      - name: Save lexical child beneath parent link
+        if: inputs.case == 'parent'
+        id: parent
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: lower-data/cache-parent/canary.txt
+          key: cache-independent-parent-cbfb444675986d13603c519c
+      - name: Save broken link control
+        if: inputs.case == 'broken'
+        id: broken
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: lower-data/cache-broken.txt
+          key: cache-independent-broken-cbfb444675986d13603c519c
+      - name: Sanitized producer result
+        if: always()
+        shell: bash
+        env:
+          CASE_NAME: ${{ inputs.case }}
+          REGULAR: ${{ steps.regular.outcome }}
+          SAFE_MEMBER: ${{ steps.safe_member.outcome }}
+          LEAF: ${{ steps.leaf.outcome }}
+          PARENT: ${{ steps.parent.outcome }}
+          BROKEN: ${{ steps.broken.outcome }}
+        run: |
+          python3 - <<'PYOUT'
+          import json,os
+          case=os.environ['CASE_NAME']; key={'regular':'REGULAR','safe-member':'SAFE_MEMBER','leaf':'LEAF','parent':'PARENT','broken':'BROKEN'}[case]
+          print('CACHE_PRODUCER_POST='+json.dumps({'case':case,'outcome':os.environ.get(key)},sort_keys=True,separators=(',',':')))
+          PYOUT
