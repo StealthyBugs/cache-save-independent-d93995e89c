@@ -1,0 +1,57 @@
+name: protected cache deterministic independent consumer
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  consume:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: regular
+            path: control/regular/safe.txt
+            key: cache-independent-regular-cbfb444675986d13603c519c
+          - case: safe-member
+            path: lower-data/data/safe.txt
+            key: cache-independent-safe-member-cbfb444675986d13603c519c
+          - case: leaf
+            path: lower-data/cache-leaf.txt
+            key: cache-independent-leaf-cbfb444675986d13603c519c
+          - case: parent
+            path: lower-data/cache-parent/canary.txt
+            key: cache-independent-parent-cbfb444675986d13603c519c
+          - case: broken
+            path: lower-data/cache-broken.txt
+            key: cache-independent-broken-cbfb444675986d13603c519c
+    name: consume-${{ matrix.case }}
+    steps:
+      - name: Restore exact owner cache
+        id: restore
+        continue-on-error: true
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25
+        with:
+          path: ${{ matrix.path }}
+          key: ${{ matrix.key }}
+          fail-on-cache-miss: false
+      - name: Sanitized exact hash projection
+        if: always()
+        shell: bash
+        env:
+          CASE_NAME: ${{ matrix.case }}
+          CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
+          RESTORE_OUTCOME: ${{ steps.restore.outcome }}
+        run: |
+          python3 - <<'PYREAD'
+          import hashlib,json,os,pathlib
+          case=os.environ['CASE_NAME']
+          paths={'regular':'control/regular/safe.txt','safe-member':'lower-data/data/safe.txt','leaf':'lower-data/cache-leaf.txt','parent':'lower-data/cache-parent/canary.txt','broken':'lower-data/cache-broken.txt'}
+          p=pathlib.Path(paths[case]); raw=b''
+          if p.is_file():
+            try: raw=p.read_bytes()
+            except Exception: raw=b''
+          row={'case':case,'cache_hit':os.environ.get('CACHE_HIT'),'restore_outcome':os.environ.get('RESTORE_OUTCOME'),'path_exists':p.exists() or p.is_symlink(),'is_symlink':p.is_symlink(),'file_present':p.is_file(),'value_sha256':hashlib.sha256(raw).hexdigest(),'value_length':len(raw)}
+          print('CACHE_CONSUMER='+json.dumps(row,sort_keys=True,separators=(',',':')))
+          PYREAD
